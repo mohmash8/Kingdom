@@ -46,27 +46,27 @@ CREATE TABLE IF NOT EXISTS chat_groups (
   force_join_channel VARCHAR(255) DEFAULT '',
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-);
-CREATE TABLE IF NOT EXISTS roles (
+);‍‍‍‍`);
+await pool.query(`CREATE TABLE IF NOT EXISTS roles (
   chat_id BIGINT,
   user_id BIGINT,
   role VARCHAR(50),
   PRIMARY KEY (chat_id, user_id)
-);
-CREATE TABLE IF NOT EXISTS warns (
+);`);
+await pool.query(`CREATE TABLE IF NOT EXISTS warns (
   chat_id BIGINT,
   user_id BIGINT,
   count INT DEFAULT 0,
   last_reason TEXT,
   PRIMARY KEY (chat_id, user_id)
-);
-CREATE TABLE IF NOT EXISTS mutes (
+);`);
+await pool.query(`CREATE TABLE IF NOT EXISTS mutes (
   chat_id BIGINT,
   user_id BIGINT,
   until_ts BIGINT,
   PRIMARY KEY (chat_id, user_id)
-);
-CREATE TABLE IF NOT EXISTS audit (
+);`);
+await pool.query(`CREATE TABLE IF NOT EXISTS audit (
   id INT AUTO_INCREMENT PRIMARY KEY,
   chat_id BIGINT,
   actor_id BIGINT,
@@ -74,13 +74,13 @@ CREATE TABLE IF NOT EXISTS audit (
   target_id BIGINT,
   reason TEXT,
   ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-CREATE TABLE IF NOT EXISTS referrals (
+);`);
+await pool.query(`CREATE TABLE IF NOT EXISTS referrals (
   ref_user_id BIGINT,
   new_user_id BIGINT,
   ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
-`)
+`);
 
 // ---------- STATEMENTS ----------
 const upsertGroup = async ({ chat_id, title, emperor_id, force_join_enabled, force_join_channel }) => {
