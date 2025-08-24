@@ -85,24 +85,24 @@ CREATE TABLE IF NOT EXISTS referrals (
 // ---------- STATEMENTS ----------
 const upsertGroup = async ({ chat_id, title, emperor_id, force_join_enabled, force_join_channel }) => {
   await pool.query(`
-    INSERT INTO groups (chat_id, title, emperor_id, force_join_enabled, force_join_channel)
+    INSERT INTO chat_groups (chat_id, title, emperor_id, force_join_enabled, force_join_channel)
     VALUES (?, ?, ?, ?, ?)
     ON DUPLICATE KEY UPDATE title=VALUES(title), updated_at=CURRENT_TIMESTAMP
   `, [chat_id, title, emperor_id, force_join_enabled, force_join_channel])
 }
 
 const setEmperorStmt = async (chat_id, emperor_id) => {
-  await pool.query(`UPDATE groups SET emperor_id=?, updated_at=CURRENT_TIMESTAMP WHERE chat_id=?`, [emperor_id, chat_id])
+  await pool.query(`UPDATE chat_groups SET emperor_id=?, updated_at=CURRENT_TIMESTAMP WHERE chat_id=?`, [emperor_id, chat_id])
 }
 
 const getGroupStmt = async (chat_id) => {
-  const [rows] = await pool.query(`SELECT * FROM groups WHERE chat_id=?`, [chat_id])
+  const [rows] = await pool.query(`SELECT * FROM chat_groups WHERE chat_id=?`, [chat_id])
   return rows[0]
 }
 
 const setCfgStmt = async ({ chat_id, rules, welcome_enabled, antispam_enabled, captcha_enabled, force_join_enabled, force_join_channel }) => {
   await pool.query(`
-    UPDATE groups SET 
+    UPDATE chat_groups SET 
       rules=?, welcome_enabled=?, antispam_enabled=?, captcha_enabled=?, force_join_enabled=?, force_join_channel=?, updated_at=CURRENT_TIMESTAMP
     WHERE chat_id=?
   `, [rules, welcome_enabled, antispam_enabled, captcha_enabled, force_join_enabled, force_join_channel, chat_id])
