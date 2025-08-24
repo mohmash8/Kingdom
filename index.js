@@ -19,7 +19,7 @@
 import 'dotenv/config'
 import { Telegraf, Markup } from 'telegraf'
 import { message } from 'telegraf/filters'
-import Database from 'better-sqlite3'
+import mysql from 'mysql2/promise';
 
 // ---------- ENV ----------
 const BOT_TOKEN = process.env.BOT_TOKEN
@@ -28,80 +28,133 @@ const FORCE_JOIN = process.env.FORCE_JOIN || '' // e.g. @its4_Four (empty to dis
 const CAPTCHA_TIMEOUT_SEC = +(process.env.CAPTCHA_TIMEOUT_SEC || 120)
 
 const bot = new Telegraf(BOT_TOKEN)
-const db = new Database('./empire.db')
+const pool = mysql.createPool(process.env.DATABASE_URL);
 
 // ---------- DB ----------
-db.exec(`
-PRAGMA journal_mode=WAL;
+await pool.query(`
 CREATE TABLE IF NOT EXISTS groups (
-  chat_id INTEGER PRIMARY KEY,
-  title TEXT,
-  emperor_id INTEGER,
+  chat_id BIGINT PRIMARY KEY,
+  title VARCHAR(255),
+  emperor_id BIGINT,
   rules TEXT DEFAULT '',
-  welcome_enabled INTEGER DEFAULT 1,
-  antispam_enabled INTEGER DEFAULT 1,
-  captcha_enabled INTEGER DEFAULT 1,
-  force_join_enabled INTEGER DEFAULT 0,
-  force_join_channel TEXT DEFAULT '',
-  created_at INTEGER DEFAULT (strftime('%s','now')),
-  updated_at INTEGER DEFAULT (strftime('%s','now'))
+  welcome_enabled TINYINT DEFAULT 1,
+  antispam_enabled TINYINT DEFAULT 1,
+  captcha_enabled TINYINT DEFAULT 1,
+  force_join_enabled TINYINT DEFAULT 0,
+  force_join_channel VARCHAR(255) DEFAULT '',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS roles (
-  chat_id INTEGER,
-  user_id INTEGER,
-  role TEXT,
+  chat_id BIGINT,
+  user_id BIGINT,
+  role VARCHAR(50),
   PRIMARY KEY (chat_id, user_id)
 );
 CREATE TABLE IF NOT EXISTS warns (
-  chat_id INTEGER,
-  user_id INTEGER,
-  count INTEGER DEFAULT 0,
+  chat_id BIGINT,
+  user_id BIGINT,
+  count INT DEFAULT 0,
   last_reason TEXT,
   PRIMARY KEY (chat_id, user_id)
 );
 CREATE TABLE IF NOT EXISTS mutes (
-  chat_id INTEGER,
-  user_id INTEGER,
-  until_ts INTEGER,
+  chat_id BIGINT,
+  user_id BIGINT,
+  until_ts BIGINT,
   PRIMARY KEY (chat_id, user_id)
 );
 CREATE TABLE IF NOT EXISTS audit (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  chat_id INTEGER,
-  actor_id INTEGER,
-  action TEXT,
-  target_id INTEGER,
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  chat_id BIGINT,
+  actor_id BIGINT,
+  action VARCHAR(50),
+  target_id BIGINT,
   reason TEXT,
-  ts INTEGER DEFAULT (strftime('%s','now'))
+  ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS referrals (
-  ref_user_id INTEGER,
-  new_user_id INTEGER,
-  ts INTEGER DEFAULT (strftime('%s','now'))
+  ref_user_id BIGINT,
+  new_user_id BIGINT,
+  ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 `)
 
-const upsertGroup = db.prepare(`
-INSERT INTO groups (chat_id, title, emperor_id, force_join_enabled, force_join_channel)
-VALUES (@chat_id, @title, @emperor_id, @force_join_enabled, @force_join_channel)
-ON CONFLICT(chat_id) DO UPDATE SET title=excluded.title, updated_at=strftime('%s','now');
-`)
-const setEmperorStmt = db.prepare(`UPDATE groups SET emperor_id=@emperor_id, updated_at=strftime('%s','now') WHERE chat_id=@chat_id`)
-const getGroupStmt = db.prepare(`SELECT * FROM groups WHERE chat_id=?`)
-const setCfgStmt = db.prepare(`UPDATE groups SET rules=@rules, welcome_enabled=@welcome_enabled, antispam_enabled=@antispam_enabled, captcha_enabled=@captcha_enabled, force_join_enabled=@force_join_enabled, force_join_channel=@force_join_channel, updated_at=strftime('%s','now') WHERE chat_id=@chat_id`)
+// ---------- STATEMENTS ----------
+const upsertGroup = async ({ chat_id, title, emperor_id, force_join_enabled, force_join_channel }) => {
+  await pool.query(`
+    INSERT INTO groups (chat_id, title, emperor_id, force_join_enabled, force_join_channel)
+    VALUES (?, ?, ?, ?, ?)
+    ON DUPLICATE KEY UPDATE title=VALUES(title), updated_at=CURRENT_TIMESTAMP
+  `, [chat_id, title, emperor_id, force_join_enabled, force_join_channel])
+}
 
-const getRoleStmt = db.prepare(`SELECT role FROM roles WHERE chat_id=? AND user_id=?`)
-const setRoleStmt = db.prepare(`INSERT INTO roles(chat_id,user_id,role) VALUES (?,?,?) ON CONFLICT(chat_id,user_id) DO UPDATE SET role=excluded.role`)
-const delRoleStmt = db.prepare(`DELETE FROM roles WHERE chat_id=? AND user_id=?`)
+const setEmperorStmt = async (chat_id, emperor_id) => {
+  await pool.query(`UPDATE groups SET emperor_id=?, updated_at=CURRENT_TIMESTAMP WHERE chat_id=?`, [emperor_id, chat_id])
+}
 
-const getWarn = db.prepare(`SELECT count FROM warns WHERE chat_id=? AND user_id=?`)
-const setWarn = db.prepare(`INSERT INTO warns(chat_id,user_id,count,last_reason) VALUES (?,?,?,?) ON CONFLICT(chat_id,user_id) DO UPDATE SET count=excluded.count, last_reason=excluded.last_reason`)
-const resetWarn = db.prepare(`DELETE FROM warns WHERE chat_id=? AND user_id=?`)
+const getGroupStmt = async (chat_id) => {
+  const [rows] = await pool.query(`SELECT * FROM groups WHERE chat_id=?`, [chat_id])
+  return rows[0]
+}
 
-const setMute = db.prepare(`INSERT INTO mutes(chat_id,user_id,until_ts) VALUES (?,?,?) ON CONFLICT(chat_id,user_id) DO UPDATE SET until_ts=excluded.until_ts`)
-const delMute = db.prepare(`DELETE FROM mutes WHERE chat_id=? AND user_id=?`)
+const setCfgStmt = async ({ chat_id, rules, welcome_enabled, antispam_enabled, captcha_enabled, force_join_enabled, force_join_channel }) => {
+  await pool.query(`
+    UPDATE groups SET 
+      rules=?, welcome_enabled=?, antispam_enabled=?, captcha_enabled=?, force_join_enabled=?, force_join_channel=?, updated_at=CURRENT_TIMESTAMP
+    WHERE chat_id=?
+  `, [rules, welcome_enabled, antispam_enabled, captcha_enabled, force_join_enabled, force_join_channel, chat_id])
+}
 
-const logAudit = db.prepare(`INSERT INTO audit(chat_id,actor_id,action,target_id,reason) VALUES (?,?,?,?,?)`)
+const getRoleStmt = async (chat_id, user_id) => {
+  const [rows] = await pool.query(`SELECT role FROM roles WHERE chat_id=? AND user_id=?`, [chat_id, user_id])
+  return rows[0]?.role
+}
+
+const setRoleStmt = async (chat_id, user_id, role) => {
+  await pool.query(`
+    INSERT INTO roles(chat_id,user_id,role) VALUES (?,?,?)
+    ON DUPLICATE KEY UPDATE role=VALUES(role)
+  `, [chat_id, user_id, role])
+}
+
+const delRoleStmt = async (chat_id, user_id) => {
+  await pool.query(`DELETE FROM roles WHERE chat_id=? AND user_id=?`, [chat_id, user_id])
+}
+
+const getWarn = async (chat_id, user_id) => {
+  const [rows] = await pool.query(`SELECT count FROM warns WHERE chat_id=? AND user_id=?`, [chat_id, user_id])
+  return rows[0]?.count
+}
+
+const setWarn = async (chat_id, user_id, count, last_reason) => {
+  await pool.query(`
+    INSERT INTO warns(chat_id,user_id,count,last_reason) VALUES (?,?,?,?)
+    ON DUPLICATE KEY UPDATE count=VALUES(count), last_reason=VALUES(last_reason)
+  `, [chat_id, user_id, count, last_reason])
+}
+
+const resetWarn = async (chat_id, user_id) => {
+  await pool.query(`DELETE FROM warns WHERE chat_id=? AND user_id=?`, [chat_id, user_id])
+}
+
+const setMute = async (chat_id, user_id, until_ts) => {
+  await pool.query(`
+    INSERT INTO mutes(chat_id,user_id,until_ts) VALUES (?,?,?)
+    ON DUPLICATE KEY UPDATE until_ts=VALUES(until_ts)
+  `, [chat_id, user_id, until_ts])
+}
+
+const delMute = async (chat_id, user_id) => {
+  await pool.query(`DELETE FROM mutes WHERE chat_id=? AND user_id=?`, [chat_id, user_id])
+}
+
+const logAudit = async (chat_id, actor_id, action, target_id, reason) => {
+  await pool.query(`
+    INSERT INTO audit(chat_id,actor_id,action,target_id,reason) VALUES (?,?,?,?,?)
+  `, [chat_id, actor_id, action, target_id, reason])
+}
+
 
 // ---------- ROLES & PERMISSIONS ----------
 const Roles = {
