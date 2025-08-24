@@ -22,7 +22,7 @@
   "author": "4",
   "license": "MIT",
   "dependencies": {
-    "better-sqlite3": "^8.1.0",
+    "mysql2": "^3.6.0",
     "dotenv": "^16.3.1",
     "telegraf": "^4.16.0"
   }
