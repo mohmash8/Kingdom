@@ -547,10 +547,10 @@ app.get("/", (req, res) => {
 });
 
 // اینجا باید تعریف بشه، نه داخل listen
-app.use(bot.webhookCallback(`/bot${token}`));
+app.use(bot.webhookCallback(`/bot${BOT_TOKEN}`));
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, async () => {
   console.log(`🚀 Server running on port ${PORT}`);
-  await bot.telegram.setWebhook(`${process.env.WEBHOOK_URL}/bot${token}`);
+  await bot.telegram.setWebhook(`${process.env.WEBHOOK_URL}/bot${BOT_TOKEN}`);
 });
