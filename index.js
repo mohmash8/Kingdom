@@ -101,7 +101,7 @@ async function migrate() {
 }
 await migrate()
 
-// ---------- STATEMENTS (با mysql2: فقط توابع ساده) ----------
+// ---------- STATEMENTS ----------
 async function upsertGroup({ chat_id, title, emperor_id, force_join_enabled, force_join_channel }) {
   await pool.query(
     `
