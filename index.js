@@ -15,6 +15,10 @@
 // • Multi-language keywords (FA/EN) for every action & role.
 // • Zero "set admin" config: actual Telegram admins are Consuls automatically.
 // ==============================================
+console.log("Starting container...")
+console.log("BOT_TOKEN:", process.env.BOT_TOKEN)
+console.log("DATABASE_URL:", process.env.DATABASE_URL)
+process.exit(0)
 
 import 'dotenv/config'
 import { Telegraf, Markup } from 'telegraf'
