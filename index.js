@@ -22,13 +22,16 @@ import { message } from 'telegraf/filters'
 import mysql from 'mysql2/promise';
 
 // ---------- ENV ----------
-const BOT_TOKEN = "8246805361:AAFjSmY4MovyCbgoHEXDgf9VZyROjQIu-GA";
+const BOT_TOKEN = process.env.BOT_TOKEN;
 if (!BOT_TOKEN) throw new Error('BOT_TOKEN missing in .env')
 const FORCE_JOIN = process.env.FORCE_JOIN || '' // e.g. @its4_Four (empty to disable)
 const CAPTCHA_TIMEOUT_SEC = +(process.env.CAPTCHA_TIMEOUT_SEC || 120)
 
 const bot = new Telegraf(BOT_TOKEN)
 const pool = mysql.createPool(process.env.DATABASE_URL);
+
+console.log("Bot starting...")
+console.log("BOT_TOKEN:", !!BOT_TOKEN)
 
 // ---------- DB ----------
 await pool.query(`
