@@ -539,7 +539,18 @@ bot.action('cfg:fj', async (ctx) => {
 
 // ---------- ERROR & LAUNCH ----------
 bot.catch((err, ctx) => { console.error('Bot error', err); ctx?.reply?.('⚠️ خطای داخلی.') })
-console.log('Imperial bot starting...')
-bot.launch()
-process.once('SIGINT', () => bot.stop('SIGINT'))
-process.once('SIGTERM', () => bot.stop('SIGTERM'))
+const express = require("express");
+const app = express();
+
+app.get("/", (req, res) => {
+  res.send("🤖 Bot is running...");
+});
+
+// اینجا باید تعریف بشه، نه داخل listen
+app.use(bot.webhookCallback(`/bot${token}`));
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, async () => {
+  console.log(`🚀 Server running on port ${PORT}`);
+  await bot.telegram.setWebhook(`${process.env.WEBHOOK_URL}/bot${token}`);
+});
