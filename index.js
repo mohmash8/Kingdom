@@ -45,7 +45,7 @@ async function migrate() {
       chat_id BIGINT PRIMARY KEY,
       title VARCHAR(255),
       emperor_id BIGINT,
-      rules TEXT DEFAULT '',
+      rules TEXT,
       welcome_enabled TINYINT DEFAULT 1,
       antispam_enabled TINYINT DEFAULT 1,
       captcha_enabled TINYINT DEFAULT 1,
