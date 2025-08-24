@@ -17,7 +17,7 @@ if (!BOT_TOKEN) throw new Error('BOT_TOKEN missing in .env')
 const FORCE_JOIN = process.env.FORCE_JOIN || '' // e.g. @its4_Four (empty to disable)
 const CAPTCHA_TIMEOUT_SEC = +(process.env.CAPTCHA_TIMEOUT_SEC || 120)
 const WEBHOOK_URL = process.env.WEBHOOK_URL
-const PORT = process.env.PORT || 3000
+const PORT = process.env.PORT || 8080;
 
 // ---------- BOT & DB ----------
 console.log('Bot starting...')
