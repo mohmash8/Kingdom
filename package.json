@@ -1,0 +1,29 @@
+{
+  "name": "imperial-bot",
+  "version": "1.0.0",
+  "description": "Telegram Emperor Group Manager Bot – Imperial Edition 👑",
+  "main": "index.js",
+  "type": "module",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "start": "node index.js"
+  },
+  "keywords": [
+    "telegram",
+    "bot",
+    "group",
+    "moderation",
+    "telegraf",
+    "imperial",
+    "management"
+  ],
+  "author": "4",
+  "license": "MIT",
+  "dependencies": {
+    "better-sqlite3": "^8.1.0",
+    "dotenv": "^16.3.1",
+    "telegraf": "^4.16.0"
+  }
+}
