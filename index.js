@@ -38,6 +38,10 @@ const pool = await mysql.createPool({
   queueLimit: 0
 })
 
+pool.query("SELECT 1")
+  .then(() => console.log("✅ Connected to MySQL"))
+  .catch(err => console.error("❌ DB error:", err))
+
 // ---------- DB MIGRATIONS ----------
 async function migrate() {
   await pool.query(`
