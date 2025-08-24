@@ -1,6 +1,7 @@
-// index.mjs
 // Emperor Group Manager Bot – "Imperial Ultra" 👑
-// Fixed: preserve emperor_id, prevent self-promote/demote, protect emperor from regular mod commands
+// Telegraf v4 (Node.js 18+)
+// نسخهٔ اصلاح‌شده: جلوگیری از خود-پروموت، محافظت از بات، بررسیِ نقشِ فعلی، و راهنمای خوش‌آمدگویی کامل
+
 import 'dotenv/config'
 import express from 'express'
 import { Telegraf, Markup } from 'telegraf'
@@ -15,7 +16,7 @@ const WEBHOOK_URL = process.env.WEBHOOK_URL // e.g. https://example.com
 const PORT = +(process.env.PORT || 8080)
 const FORCE_JOIN = process.env.FORCE_JOIN || '' // e.g. @its4_Four (empty to disable)
 const CAPTCHA_TIMEOUT_SEC = +(process.env.CAPTCHA_TIMEOUT_SEC || 120)
-const TAG_MAX_MENTIONS = +(process.env.TAG_MAX_MENTIONS || 20)
+const TAG_MAX_MENTIONS = +(process.env.TAG_MAX_MENTIONS || 20) // سقف منشن برای جلوگیری از اسپم
 
 // ---------- BOT & DB ----------
 console.log('Bot starting...')
@@ -23,6 +24,7 @@ console.log('BOT_TOKEN:', !!BOT_TOKEN)
 
 const bot = new Telegraf(BOT_TOKEN)
 
+// MySQL pool
 const pool = await mysql.createPool({
   uri: process.env.DATABASE_URL,
   waitForConnections: true,
@@ -30,7 +32,7 @@ const pool = await mysql.createPool({
   queueLimit: 0
 })
 
-try { await pool.query('SELECT 1'); console.log('✅ Connected to MySQL') } catch (err) { console.error('❌ DB error:', err) }
+try { await pool.query('SELECT 1') ; console.log('✅ Connected to MySQL') } catch (err) { console.error('❌ DB error:', err) }
 
 // ---------- DB MIGRATIONS ----------
 async function migrate() {
@@ -41,6 +43,7 @@ async function migrate() {
       emperor_id BIGINT,
       rules TEXT,
       welcome_enabled TINYINT DEFAULT 1,
+      welcome_full_guide TINYINT DEFAULT 1,
       antispam_enabled TINYINT DEFAULT 1,
       captcha_enabled TINYINT DEFAULT 1,
       force_join_enabled TINYINT DEFAULT 0,
@@ -105,9 +108,9 @@ async function migrate() {
 }
 await migrate()
 
-// ---------- DB HELPERS ----------
-async function upsertGroup({ chat_id, title, emperor_id, force_join_enabled, force_join_channel }) {
-  // Backwards-compatible safe upsert: only update emperor_id when explicitly provided
+// ---------- HELPERS: DB ----------
+async function upsertGroupSafe({ chat_id, title, emperor_id, force_join_enabled, force_join_channel }) {
+  // safe: only overwrite emperor_id if explicitly provided
   if (typeof emperor_id === 'undefined' || emperor_id === null) {
     await pool.query(
       `INSERT INTO chat_groups (chat_id, title, force_join_enabled, force_join_channel)
@@ -124,45 +127,37 @@ async function upsertGroup({ chat_id, title, emperor_id, force_join_enabled, for
     )
   }
 }
-
 async function setEmperor(chat_id, emperor_id) {
   await pool.query(`UPDATE chat_groups SET emperor_id=?, updated_at=CURRENT_TIMESTAMP WHERE chat_id=?`, [emperor_id, chat_id])
 }
-
 async function getGroup(chat_id) {
   const [rows] = await pool.query(`SELECT * FROM chat_groups WHERE chat_id=?`, [chat_id])
   return rows[0]
 }
-
-async function setCfg({ chat_id, rules, welcome_enabled, antispam_enabled, captcha_enabled, force_join_enabled, force_join_channel }) {
+async function setCfg({ chat_id, rules, welcome_enabled, antispam_enabled, captcha_enabled, force_join_enabled, force_join_channel, welcome_full_guide }) {
   await pool.query(
     `UPDATE chat_groups SET 
-      rules=?, welcome_enabled=?, antispam_enabled=?, captcha_enabled=?, force_join_enabled=?, force_join_channel=?, updated_at=CURRENT_TIMESTAMP
-    WHERE chat_id=?`,
-    [rules, welcome_enabled, antispam_enabled, captcha_enabled, force_join_enabled, force_join_channel, chat_id]
+      rules=?, welcome_enabled=?, antispam_enabled=?, captcha_enabled=?, force_join_enabled=?, force_join_channel=?, welcome_full_guide=COALESCE(?, welcome_full_guide), updated_at=CURRENT_TIMESTAMP
+     WHERE chat_id=?`,
+    [rules, welcome_enabled, antispam_enabled, captcha_enabled, force_join_enabled, force_join_channel, welcome_full_guide ?? null, chat_id]
   )
 }
-
 async function getRole(chat_id, user_id) {
   const [rows] = await pool.query(`SELECT role FROM roles WHERE chat_id=? AND user_id=?`, [chat_id, user_id])
   return rows[0]?.role
 }
-
-async function setRole(chat_id, user_id, role) {
+async function setRoleDB(chat_id, user_id, role) {
   await pool.query(
     `INSERT INTO roles(chat_id,user_id,role) VALUES (?,?,?)
      ON DUPLICATE KEY UPDATE role=VALUES(role)`,
     [chat_id, user_id, role]
   )
 }
-
-// Safe wrapper to prevent changing emperor via normal DB helper
 async function setRoleSafe(chat_id, user_id, role) {
   const g = await getGroup(chat_id)
   if (g?.emperor_id === user_id) throw new Error('cannot_change_emperor_role')
-  await setRole(chat_id, user_id, role)
+  await setRoleDB(chat_id, user_id, role)
 }
-
 async function delRole(chat_id, user_id) {
   await pool.query(`DELETE FROM roles WHERE chat_id=? AND user_id=?`, [chat_id, user_id])
 }
@@ -211,6 +206,7 @@ const Roles = Object.freeze({
   PRINCESS: 'princess',
   SOLDIER: 'soldier'
 })
+
 const RoleLabelsFA = Object.freeze({
   king: '👑 پادشاه',
   queen: '👸 ملکه',
@@ -219,10 +215,12 @@ const RoleLabelsFA = Object.freeze({
   princess: '👸 پرنسس',
   soldier: '🛡 سرباز'
 })
+
 const HIERARCHY = [Roles.SOLDIER, Roles.PRINCESS, Roles.PRINCE, Roles.KNIGHT, Roles.QUEEN, Roles.KING]
 const roleRank = (role) => Math.max(0, HIERARCHY.indexOf(role || Roles.SOLDIER))
 
 const Cap = Object.freeze({ BAN:'ban', UNBAN:'unban', MUTE:'mute', UNMUTE:'unmute', WARN:'warn', UNWARN:'unwarn', PURGE:'purge', PROMOTE:'promote', DEMOTE:'demote', PANEL:'panel', RULES:'rules', TAG:'tag' })
+
 const CAP_MATRIX = {
   [Roles.KING]: new Set(Object.values(Cap)),
   [Roles.QUEEN]: new Set(Object.values(Cap)),
@@ -231,10 +229,12 @@ const CAP_MATRIX = {
   [Roles.PRINCESS]: new Set([Cap.MUTE, Cap.WARN, Cap.RULES, Cap.TAG]),
   [Roles.SOLDIER]: new Set([Cap.RULES, Cap.TAG])
 }
+
 function canUse(actorRole, capability) {
   const set = CAP_MATRIX[actorRole] || CAP_MATRIX[Roles.SOLDIER]
   return set.has(capability)
 }
+
 function canActOn(actorRole, targetRole, allowEqual = false) {
   if ([Roles.KING, Roles.QUEEN].includes(actorRole)) return true
   const a = roleRank(actorRole)
@@ -242,7 +242,7 @@ function canActOn(actorRole, targetRole, allowEqual = false) {
   return allowEqual ? a >= b : a > b
 }
 
-// ---------- KEYWORDS ----------
+// ---------- KEYWORDS (FA/EN) ----------
 const KW = {
   ban: [/\bban\b/i, /تبعید/i],
   unban: [/\bunban\b/i, /رفع\s?(?:بن|تبعید)/i],
@@ -256,8 +256,10 @@ const KW = {
   setrules: [/\bset\s?rules\b/i, /تنظیم\s?قوانین/i],
   promote: [/\bpromote\b/i, /ارتقا|تنظیم/i],
   demote: [/\bdemote\b/i, /تنزل|کاهش\s?رتبه/i],
-  tag: [/\btag\b/i, /تگ/i]
+  tag: [/\btag\b/i, /تگ/i],
+  help: [/\bhelp\b/i, /راهنما/i]
 }
+
 const ROLE_KW = {
   [Roles.QUEEN]: [/\bqueen\b/i, /ملکه/i],
   [Roles.KNIGHT]: [/\bknight\b/i, /شوالیه/i],
@@ -265,6 +267,7 @@ const ROLE_KW = {
   [Roles.PRINCESS]: [/\bprincess\b/i, /پرنسس/i],
   [Roles.SOLDIER]: [/\bsoldier\b/i, /سرباز/i]
 }
+
 const matchAny = (text, regexArr) => regexArr.some(r => r.test(text))
 
 // ---------- UTIL ----------
@@ -273,16 +276,14 @@ async function detectEmperor(ctx) {
     const admins = await ctx.getChatAdministrators()
     const creator = admins.find(a => a.status === 'creator')
     if (creator) {
-      // only set emperor if not already set
       const g = await getGroup(ctx.chat.id)
       if (!g?.emperor_id) await setEmperor(ctx.chat.id, creator.user.id)
       return creator.user
     }
-  } catch (e) {
-    // ignore
-  }
+  } catch (e) {}
   return null
 }
+
 function parseDuration(str) {
   if (!str) return null
   if (!/^\d+[smhd]$/i.test(str)) return null
@@ -291,9 +292,11 @@ function parseDuration(str) {
   const mul = u === 's' ? 1e3 : u === 'm' ? 60e3 : u === 'h' ? 3600e3 : 86400e3
   return n * mul
 }
+
 async function isAdmin(ctx, userId) {
   try { const m = await ctx.getChatMember(userId); return ['creator','administrator'].includes(m.status) } catch { return false }
 }
+
 async function getUserRole(ctx, userId) {
   const g = await getGroup(ctx.chat.id)
   if (g?.emperor_id === userId) return Roles.KING
@@ -302,11 +305,14 @@ async function getUserRole(ctx, userId) {
   if (await isAdmin(ctx, userId)) return Roles.KNIGHT
   return stored || Roles.SOLDIER
 }
+
 async function safeRestrict(ctx, userId, perms, untilDateSec) {
-  try { await ctx.restrictChatMember(userId, { permissions: perms, until_date: untilDateSec }); return true } catch (e) { await safeReply(ctx, '⚠️ '+(e.description||e.message)); return false }
+  try { await ctx.restrictChatMember(userId, { permissions: perms, until_date: untilDateSec }) ; return true }
+  catch (e) { await safeReply(ctx, '⚠️ '+(e.description||e.message)) ; return false }
 }
-async function safeBan(ctx, userId) { try { await ctx.banChatMember(userId); return true } catch (e) { await safeReply(ctx, '⚠️ '+(e.description||e.message)); return false } }
-async function safeUnban(ctx, userId) { try { await ctx.unbanChatMember(userId); return true } catch { return false } }
+async function safeBan(ctx, userId) { try { await ctx.banChatMember(userId) ; return true } catch (e) { await safeReply(ctx, '⚠️ '+(e.description||e.message)) ; return false } }
+async function safeUnban(ctx, userId) { try { await ctx.unbanChatMember(userId) ; return true } catch { return false } }
+
 function human(ms) {
   const s = Math.floor(ms/1000)
   if (s < 60) return `${s}s`
@@ -317,11 +323,42 @@ function human(ms) {
   const d = Math.floor(h/24), hr = h%24
   return `${d}d${hr?`${hr}h`:''}`
 }
-function extractArgs(text) { const parts = text.trim().split(/\s+/); const dur = parts.find(p => /^\d+[smhd]$/i.test(p)); const reason = text.replace(/\s*\d+[smhd]\s*/i, '').trim(); return { dur, reason } }
-async function safeReply(ctx, text, extra = {}) { try { await ctx.reply(text, { reply_to_message_id: ctx.message?.message_id, allow_sending_without_reply: true, ...extra }) } catch {} }
+
+function extractArgs(text) {
+  const parts = text.trim().split(/\s+/)
+  const dur = parts.find(p => /^\d+[smhd]$/i.test(p))
+  const reason = text.replace(/\s*\d+[smhd]\s*/i, '').trim()
+  return { dur, reason }
+}
+
+async function safeReply(ctx, text, extra = {}) {
+  try { await ctx.reply(text, { reply_to_message_id: ctx.message?.message_id, allow_sending_without_reply: true, ...extra }) } catch {}
+}
+
+// readable capability labels (فارسی)
+const CAP_LABELS_FA = {
+  ban: 'تبعید (ban)',
+  unban: 'رفع تبعید (unban)',
+  mute: 'سکوت (mute)',
+  unmute: 'رفع سکوت (unmute)',
+  warn: 'اخطار (warn)',
+  unwarn: 'ریست اخطار (unwarn)',
+  purge: 'پاکسازی پیام‌ها (purge)',
+  promote: 'ارتقا نقش',
+  demote: 'تنزل نقش',
+  panel: 'دسترسی به پنل مدیریت',
+  rules: 'ویرایش/مشاهده قوانین',
+  tag: 'تگ/منشن گروه'
+}
+
+function roleDescription(role) {
+  const caps = Array.from(CAP_MATRIX[role] || [])
+  if (!caps.length) return 'بدون دسترسی خاص.'
+  return caps.map(c => '• ' + (CAP_LABELS_FA[c] || c)).join('\n')
+}
 
 // ---------- STATE ----------
-const spamMap = new Map()
+const spamMap = new Map() // key: chat:user => { last, count, ts }
 
 // ---------- START ----------
 bot.start(async (ctx) => {
@@ -338,18 +375,24 @@ bot.start(async (ctx) => {
 bot.on('my_chat_member', async (ctx) => {
   const status = ctx.myChatMember.new_chat_member.status
   if (['administrator','member'].includes(status)) {
-    await upsertGroup({ chat_id: ctx.chat.id, title: ctx.chat.title || '', force_join_enabled: FORCE_JOIN ? 1 : 0, force_join_channel: FORCE_JOIN })
+    await upsertGroupSafe({ chat_id: ctx.chat.id, title: ctx.chat.title || '', force_join_enabled: FORCE_JOIN ? 1 : 0, force_join_channel: FORCE_JOIN })
     const emp = await detectEmperor(ctx)
-    await safeReply(ctx, `امپراتوری فعال شد.${emp ? ' 👑 ' + (emp.first_name) : ''}\n— ریپلای کن و بگو: «تبعید/ban»، «سکوت/mute 10m»، «اخطار/warn»، «ارتقا شوالیه/promote knight» و...`)
+    await safeReply(ctx, `امپراتوری فعال شد.${emp ? ' 👑 ' + (emp.first_name) : ''}\n— ریپلای کن و بگو: «تبعید/ban", «سکوت/mute 10m", «اخطار/warn", «ارتقا شوالیه/promote knight" و...`)
   }
 })
 
-// ---------- NEW MEMBERS ----------
+// ---------- NEW MEMBERS: welcome, force-join, captcha + full guide ----------
 bot.on(message('new_chat_members'), async (ctx) => {
   const g = await getGroup(ctx.chat.id)
   if (!g) return
   for (const m of ctx.message.new_chat_members) {
-    if (g.welcome_enabled) await safeReply(ctx, `🏛 خوش آمدی ${m.first_name}!`)
+    if (g.welcome_enabled) {
+      await safeReply(ctx, `🏛 خوش آمدی ${m.first_name}!`)
+      if (g.welcome_full_guide) {
+        const guide = `🎯 راهنمای نقش‌ها:\n\n${RoleLabelsFA[Roles.KING]}: همهٔ دسترسی‌ها (تنظیم امپراتور توسط سازنده/مالک گروه).\n${RoleLabelsFA[Roles.QUEEN]}: تقریباً همهٔ دسترسی‌ها مانند پادشاه.\n${RoleLabelsFA[Roles.KNIGHT]}: ${roleDescription(Roles.KNIGHT)}\n${RoleLabelsFA[Roles.PRINCE]}: ${roleDescription(Roles.PRINCE)}\n${RoleLabelsFA[Roles.PRINCESS]}: ${roleDescription(Roles.PRINCESS)}\n${RoleLabelsFA[Roles.SOLDIER]}: ${roleDescription(Roles.SOLDIER)}\n\nبرای دیدن این راهنما دوباره بنویس: "راهنما"`;
+        await safeReply(ctx, guide)
+      }
+    }
     if (g.force_join_enabled && g.force_join_channel) {
       try { await ctx.restrictChatMember(m.id, { permissions: { can_send_messages: false } }) } catch {}
       await ctx.reply(`برای دسترسی، عضو ${g.force_join_channel} شو و سپس روی «تأیید عضویت» بزن.`, {
@@ -422,8 +465,10 @@ bot.on(message('text'), async (ctx) => {
   const g = await getGroup(ctx.chat.id)
   if (!g) return
 
+  // ثبت کاربر برای تگ
   await touchRecentUser(ctx.chat.id, ctx.from)
 
+  // Anti-spam: تکرار سریع و لینک
   if (g.antispam_enabled) {
     const key = `${ctx.chat.id}:${ctx.from.id}`
     const mem = spamMap.get(key) || { last:'', count:0, ts:0 }
@@ -461,6 +506,12 @@ bot.on(message('text'), async (ctx) => {
   const actorId = ctx.from.id
   const actorRole = await getUserRole(ctx, actorId)
 
+  // HELP / راهنما
+  if (matchAny(text, KW.help)) {
+    const helpText = `📚 راهنما:\n\n${RoleLabelsFA[Roles.KING]}: همهٔ دسترسی‌ها (مدیر کامل).\n${RoleLabelsFA[Roles.QUEEN]}: تقریباً همهٔ دسترسی‌ها.\n${RoleLabelsFA[Roles.KNIGHT]}: ${roleDescription(Roles.KNIGHT)}\n${RoleLabelsFA[Roles.PRINCE]}: ${roleDescription(Roles.PRINCE)}\n${RoleLabelsFA[Roles.PRINCESS]}: ${roleDescription(Roles.PRINCESS)}\n${RoleLabelsFA[Roles.SOLDIER]}: ${roleDescription(Roles.SOLDIER)}\n\nنکته: برای انجام عملیات مدیریتی ریپلای کن به پیام هدف و سپس بنویس "تبعید"/"سکوت 10m"/"ارتقا شوالیه" و...`;
+    return safeReply(ctx, helpText)
+  }
+
   // پنل
   if (matchAny(text, KW.panel)) {
     if (!canUse(actorRole, Cap.PANEL)) return
@@ -495,7 +546,7 @@ bot.on(message('text'), async (ctx) => {
     return safeReply(ctx, '📜 قوانین به‌روزرسانی شد.')
   }
 
-  // تگ
+  // تگ (tag / تگ [اختیاری: عدد])
   if (matchAny(text, KW.tag)) {
     if (!canUse(actorRole, Cap.TAG)) return
     const n = Math.max(1, Math.min(TAG_MAX_MENTIONS, +text.split(/\s+/)[1] || 10))
@@ -503,22 +554,24 @@ bot.on(message('text'), async (ctx) => {
     if (!users.length) return safeReply(ctx, 'کسی برای تگ یافت نشد.')
     const mentions = users.map(u => {
       if (u.username) return `@${u.username}`
+      // mention لینک: برای کاربر بدون یوزرنیم
       return `[${u.first_name || 'کاربر'}](tg://user?id=${u.user_id})`
     }).join(' ')
     return ctx.reply(`📣 ${mentions}`, { parse_mode: 'Markdown', reply_to_message_id: ctx.message.message_id })
   }
 
-  // نیازمند ریپلای
+  // مدیریت نیازمند ریپلای
   if (!replyTo) return
   if (replyTo?.from) await touchRecentUser(ctx.chat.id, replyTo.from)
 
   const target = replyTo.from
   const targetRole = await getUserRole(ctx, target.id)
+  const storedTargetRole = await getRole(ctx.chat.id, target.id) // stored DB role
   const targetIsAdmin = await isAdmin(ctx, target.id)
 
-  // جلوگیری از انجام عملیات روی خود کاربر
+  // محافظت‌ها: روی خود، روی بات، روی امپراتور اعمال نشود
   if (actorId === target.id) return safeReply(ctx, '⚠️ شما نمی‌توانید روی خودتان این عملیات را انجام دهید.')
-  // محافظت از امپراتور
+  if (target.id === ctx.me) return safeReply(ctx, '⚠️ روی خودِ ربات نمی‌توان این عملیات را انجام داد.')
   if (g?.emperor_id && g.emperor_id === target.id) return safeReply(ctx, '⚠️ روی امپراتور نمی‌توان این عملیات را انجام داد.')
 
   // PROMOTE / DEMOTE
@@ -527,8 +580,14 @@ bot.on(message('text'), async (ctx) => {
     if (!canActOn(actorRole, targetRole, true)) return safeReply(ctx, 'اجازه نداری روی رتبهٔ برابر/بالاتر اعمال کنی.')
     const roleKey = Object.keys(ROLE_KW).find(r => matchAny(text, ROLE_KW[r]))
     if (!roleKey) return safeReply(ctx, 'نقش پیدا نشد. مثال: "promote knight" / "ارتقا شوالیه"')
+
+    // if both effective role and stored role match requested role => nothing to do
+    const effectiveRole = targetRole
+    if (effectiveRole === roleKey && storedTargetRole === roleKey) return safeReply(ctx, `⚠️ ${target.first_name} هم‌اکنون نقش ${RoleLabelsFA[roleKey]} را دارد.`)
+
     try {
       await setRoleSafe(ctx.chat.id, target.id, roleKey)
+      await logAudit(ctx.chat.id, actorId, 'promote', target.id, roleKey)
       return safeReply(ctx, `✅ ارتقا: ${target.first_name} → ${RoleLabelsFA[roleKey]}`)
     } catch (e) {
       if (e.message === 'cannot_change_emperor_role') return safeReply(ctx, '⚠️ نقش امپراتور را نمی‌توان از طریق این دستور تغییر داد.')
@@ -539,9 +598,9 @@ bot.on(message('text'), async (ctx) => {
   if (matchAny(text, KW.demote)) {
     if (!canUse(actorRole, Cap.DEMOTE)) return safeReply(ctx, 'مجوز تنزل نداری.')
     if (!canActOn(actorRole, targetRole, false)) return safeReply(ctx, 'اجازه نداری.')
-    // extra protection: cannot demote emperor
     if (g?.emperor_id && g.emperor_id === target.id) return safeReply(ctx, '⚠️ نمی‌توان امپراتور را تنزل داد.')
     await delRole(ctx.chat.id, target.id)
+    await logAudit(ctx.chat.id, actorId, 'demote', target.id, '-')
     return safeReply(ctx, `✅ تنزل: ${target.first_name} → ${RoleLabelsFA[Roles.SOLDIER]}`)
   }
 
@@ -550,15 +609,17 @@ bot.on(message('text'), async (ctx) => {
     if (!canUse(actorRole, Cap.BAN)) return safeReply(ctx, 'مجوز تبعید نداری.')
     if (!canActOn(actorRole, targetRole)) return safeReply(ctx, 'اجازهٔ تبعید این کاربر را نداری.')
     if (targetIsAdmin) return safeReply(ctx, '🚫 نمی‌توان ادمین/سازنده را تبعید کرد.')
+    if (target.id === ctx.me) return safeReply(ctx, '⚠️ نمی‌توان ربات را تبعید کرد.')
     if (g?.emperor_id && g.emperor_id === target.id) return safeReply(ctx, '⚠️ روی امپراتور نمی‌توان این عملیات را انجام داد.')
     const ok = await safeBan(ctx, target.id)
-    if (ok) { await logAudit(ctx.chat.id, actorId, 'ban', target.id, '-'); return safeReply(ctx, `🚫 تبعید شد: ${target.first_name}`) }
+    if (ok) { await logAudit(ctx.chat.id, actorId, 'ban', target.id, '-') ; return safeReply(ctx, `🚫 تبعید شد: ${target.first_name}`) }
     return
   }
+
   if (matchAny(text, KW.unban)) {
     if (!canUse(actorRole, Cap.UNBAN)) return
     const ok = await safeUnban(ctx, target.id)
-    if (ok) { await logAudit(ctx.chat.id, actorId, 'unban', target.id, '-'); return safeReply(ctx, `✅ رفع تبعید: ${target.first_name}`) }
+    if (ok) { await logAudit(ctx.chat.id, actorId, 'unban', target.id, '-') ; return safeReply(ctx, `✅ رفع تبعید: ${target.first_name}`) }
     return
   }
 
@@ -567,6 +628,7 @@ bot.on(message('text'), async (ctx) => {
     if (!canUse(actorRole, Cap.MUTE)) return safeReply(ctx, 'مجوز سکوت نداری.')
     if (!canActOn(actorRole, targetRole)) return safeReply(ctx, 'اجازه نداری.')
     if (targetIsAdmin) return safeReply(ctx, '🚫 نمی‌توان ادمین/سازنده را میوت کرد.')
+    if (target.id === ctx.me) return safeReply(ctx, '⚠️ نمی‌توان ربات را میوت کرد.')
     if (g?.emperor_id && g.emperor_id === target.id) return safeReply(ctx, '⚠️ روی امپراتور نمی‌توان این عملیات را انجام داد.')
     const { dur } = extractArgs(text)
     const ms = dur ? parseDuration(dur) : 10*60*1000
@@ -579,6 +641,7 @@ bot.on(message('text'), async (ctx) => {
     }
     return
   }
+
   if (matchAny(text, KW.unmute)) {
     if (!canUse(actorRole, Cap.UNMUTE)) return
     const ok = await safeRestrict(ctx, target.id, {
@@ -618,6 +681,7 @@ bot.on(message('text'), async (ctx) => {
     }
     return safeReply(ctx, `⚠️ اخطار ${next}/3 برای ${target.first_name}`)
   }
+
   if (matchAny(text, KW.unwarn)) {
     if (!canUse(actorRole, Cap.UNWARN)) return
     await resetWarn(ctx.chat.id, target.id)
@@ -625,17 +689,19 @@ bot.on(message('text'), async (ctx) => {
     return safeReply(ctx, '✅ اخطارها ریست شد.')
   }
 
-  // PURGE
+  // PURGE (پاکسازی سریع بین دو پیام)
   if (matchAny(text, KW.purge)) {
     if (!canUse(actorRole, Cap.PURGE)) return
     try {
       const fromId = replyTo.message_id
       const toId = ctx.message.message_id
       for (let mid = fromId; mid <= toId; mid++) {
+        // هر پیام ممکنه پاک نشه؛ ادامه بده
+        // eslint-disable-next-line no-await-in-loop
         await ctx.deleteMessage(mid).catch(() => {})
       }
       await logAudit(ctx.chat.id, actorId, 'purge', 0, '-')
-    } catch { await safeReply(ctx, 'پاکسازی ناموفق.') }
+    } catch (e) { await safeReply(ctx, 'پاکسازی ناموفق.') }
   }
 })
 
@@ -685,3 +751,12 @@ app.listen(PORT, async () => {
   if (!WEBHOOK_URL) { console.error('⚠️ WEBHOOK_URL is missing in .env'); return }
   try { await bot.telegram.setWebhook(`${WEBHOOK_URL}/bot${BOT_TOKEN}`); console.log('✅ Webhook set') } catch (e) { console.error('❌ setWebhook failed:', e) }
 })
+
+/* EOF: نسخهٔ بهبودیافته — تغییرات اصلی:
+  - جلوگیری از خود-پروموت و اعمال مدیریتی روی خود کاربر
+  - محافظت از ربات (قابل عمل کردن روی خودش نیست)
+  - جلوگیری از تغییر نقش امپراتور توسط دستورات معمول
+  - اگر نقشِ هدف همان نقشِ فعلی باشد پیام مناسب داده می‌شود
+  - خوش‌آمدگویی کامل شامل توضیح نقش‌ها
+  - رفع مشکلات overwrite شدن emperor_id هنگام آپدیت گروه
+*/
