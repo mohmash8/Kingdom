@@ -34,7 +34,7 @@ console.log("BOT_TOKEN:", !!BOT_TOKEN)
 
 // ---------- DB ----------
 await pool.query(`
-CREATE TABLE IF NOT EXISTS `groups` (
+CREATE TABLE IF NOT EXISTS chat_groups (
   chat_id BIGINT PRIMARY KEY,
   title VARCHAR(255),
   emperor_id BIGINT,
