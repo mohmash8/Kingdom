@@ -400,7 +400,7 @@ bot.on(message('text'), async (ctx) => {
 
   // MUTE / UNMUTE (duration optional)
   if (matchAny(text, KW.mute)) {
-    if (!canAct(actorRole, targetRole)) return ctx.reply('اجازه نداری.')</n>
+    if (!canAct(actorRole, targetRole)) return ctx.reply('اجازه نداری.</n>')
     const { dur } = extractArgs(text)
     const ms = dur ? parseDuration(dur) : 10*60*1000
     const until = Math.floor((Date.now()+ms)/1000)
