@@ -19,6 +19,10 @@ import 'dotenv/config'
 import { Telegraf, Markup } from 'telegraf'
 import { message } from 'telegraf/filters'
 import mysql from 'mysql2/promise';
+import express from 'express';
+
+const app = express();
+app.use(express.json()); // برای دریافت JSON از تلگرام
 
 // ---------- ENV ----------
 const BOT_TOKEN = process.env.BOT_TOKEN;
